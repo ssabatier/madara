@@ -15,6 +15,7 @@
 #include "FunctionDefaults.h"
 #include "MadaraKnowledgeContainers.h"
 #include "MadaraKnowledge.h"
+#include "madara/knowledge/PyKnowledgeBase.h"
 
 #include "capnp/schema-loader.h"
 #include "capnp/schema.h"
@@ -323,6 +324,10 @@ void define_knowledge (void)
     "Settings for checkpoints and file saves", init <> ())
 
      // class members
+    .def_readwrite("buffer_filters",
+      &madara::knowledge::CheckpointSettings::buffer_filters,
+      "buffer filters. Note that the user must clean up memory of all filters")
+
     .def_readwrite("buffer_size",
       &madara::knowledge::CheckpointSettings::buffer_size,
       "size of the buffer needed to hold file in memory")
@@ -334,6 +339,11 @@ void define_knowledge (void)
     .def_readwrite("filename",
       &madara::knowledge::CheckpointSettings::filename,
       "the path and name of the file to load/save")
+
+    .def_readwrite("ignore_header_check",
+      &madara::knowledge::CheckpointSettings::ignore_header_check,
+      "If true, do not perform a header check. This is useful if you are"
+       "loading an arbitrary text file with no buffer filters")      
 
     .def_readwrite("initial_lamport_clock",
       &madara::knowledge::CheckpointSettings::initial_lamport_clock,
@@ -381,9 +391,14 @@ void define_knowledge (void)
       "use the timestamps in this class instead of wallclock time when"
       "writing context or checkpoints")
 
+    .def_readwrite("playback_simtime",
+      &madara::knowledge::CheckpointSettings::playback_simtime,
+      "If true, update simtime during playback to match recorded TOI. Only"
+       "operable if MADARA_FEATURE_SIMTIME macro is defined")      
+
     .def_readwrite("prefixes",
       &madara::knowledge::CheckpointSettings::prefixes,
-      "a list of prefixes to save/load. If empty, all prefixes are valid")
+      "A list of prefixes to save/load. If empty, all prefixes are valid")
 
     .def_readwrite("reset_checkpoint",
       &madara::knowledge::CheckpointSettings::reset_checkpoint,
@@ -393,37 +408,41 @@ void define_knowledge (void)
       &madara::knowledge::CheckpointSettings::states,
       "the number of states checkpointed in the file stream")
 
+    .def_readwrite("variables_lister",
+      &madara::knowledge::CheckpointSettings::variables_lister,
+      "Object which will be used to extract variables for checkpoint saving."
+       "By default (if left nullptr), use a default implementation which uses"
+       "ThreadSaveContext::get_local_modified")
+
     .def_readwrite("version",
       &madara::knowledge::CheckpointSettings::version,
-      "the MADARA version used when the checkpoint was saved")
-
-      
+      "the MADARA version used when the checkpoint was saved") 
   ;
 
   class_<madara::knowledge::FileFragmenter> (
      "FileFragmenter",
      "Splits or reforms a file from disk or knowledge base", init <> ())
 
-    // evaluate an expression
+    // create a vector in the KB
+    .def( "create_vector",
+      &madara::knowledge::FileFragmenter::create_vector,
+        m_create_vector_2_of_3 (
+        args("key", "kb", "settings"),
+        "Creates a Vector in the KB using current file fragments"))  
+
+    // split a file
+    .def( "fragment_buffer",
+      &madara::knowledge::FileFragmenter::fragment_buffer,
+        m_fragment_buffer_2_of_3 (
+        args("buffer", "size", "settings"),
+        "Splits a file, given a buffer and size with settings"))           
+
+    // split a file, given a filename
     .def( "fragment_file",
       &madara::knowledge::FileFragmenter::fragment_file,
         m_fragment_file_1_of_2 (
         args("filename", "settings"),
         "Splits a file, given a filename and settings"))
-      
-    // evaluate an expression
-    .def( "fragment_buffer",
-      &madara::knowledge::FileFragmenter::fragment_buffer,
-        m_fragment_buffer_2_of_3 (
-        args("buffer", "size", "settings"),
-        "Splits a file, given a buffer and size with settings"))
-      
-    // evaluate an expression
-    .def( "create_vector",
-      &madara::knowledge::FileFragmenter::create_vector,
-        m_create_vector_2_of_3 (
-        args("key", "kb", "settings"),
-        "Creates a Vector in the KB using current file fragments"))
       
     // evaluate an expression
     .def( "from_kb",
@@ -467,234 +486,227 @@ void define_knowledge (void)
 
      .def (init <const madara::knowledge::KnowledgeRecord &> ())
 
-     // clears the value to a 0 integer
-     .def ("clear_value", &madara::knowledge::KnowledgeRecord::clear_value,
-     "Sets the value to 0 and type to integer")
+    // apply knowledge record to a context
+    .def ("apply", &madara::knowledge::KnowledgeRecord::apply,
+      "Apply the knowledge record to a context, given some quality and clock")     
+
+    // clears the value to a 0 integer
+    .def ("clear_value", &madara::knowledge::KnowledgeRecord::clear_value,
+      "Sets the value to 0 and type to integer")
+
+    // decrements an index of an array
+    .def ("dec_index", &madara::knowledge::KnowledgeRecord::dec_index,
+      "Decrements an array element at a particular index")
+
+    // returns true if record exists
+    .def ("exists", &madara::knowledge::KnowledgeRecord::exists,
+      "Returns whether the knowledge has been set/modified/created")
+
+    // fragments the record
+    .def ("fragment", &madara::knowledge::KnowledgeRecord::fragment,
+     "Fragments the record into components")
  
-     // sets the contents of the record as a file
-     .def ("read_file", &madara::knowledge::KnowledgeRecord::read_file,
+    // gets the double precision
+    .def ("get_precision", &madara::knowledge::KnowledgeRecord::get_precision,
+      "Gets the double precision used in to_string")
+
+    // increments an index of an array
+    .def ("inc_index", &madara::knowledge::KnowledgeRecord::inc_index,
+      "Increments an array element at a particular index")        
+
+    // checks if record is a binary file type
+    .def ("is_binary_file_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_binary_file_type),
+      "Checks if the record is a binary file type")
+
+    // checks if record is a double type
+    .def ("is_double_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_double_type),
+      "Checks if the record is a double type")     
+
+    // checks if the record is false
+    .def ("is_false", &madara::knowledge::KnowledgeRecord::is_false,
+      "Checks if the record is false")
+
+    // checks if record is a file type
+    .def ("is_file_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_file_type),
+      "Checks if the record is a file type")
+
+    // checks if the record is an image type
+    .def ("is_image_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_image_type),
+      "Checks if the record is an image type")
+
+    // checks if the record is an integer type
+    .def ("is_integer_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_integer_type),
+      "Checks if the record is an integer type")
+
+    // checks if the record is a string type
+    .def ("is_string_type",
+      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      &madara::knowledge::KnowledgeRecord::is_string_type),
+      "Checks if the record is a string type") 
+
+    // checks if the record is true
+    .def ("is_true", &madara::knowledge::KnowledgeRecord::is_true,
+      "Checks if the record is true")         
+
+    // sets the contents of the record as a file
+    .def ("read_file", &madara::knowledge::KnowledgeRecord::read_file,
       m_read_file_1_of_2 (
       args("filename", "read_as_type"),
         "Reads the contents of a file into the record. Type "
         "is an optional field that can force a type for reading into."))
 
-     // gets the double precision
-     .def ("get_precision", &madara::knowledge::KnowledgeRecord::get_precision,
-     "Gets the double precision used in to_string")
+    // reset the record to UNCREATED
+    .def ("reset_value", &madara::knowledge::KnowledgeRecord::reset_value,
+      "Resets the record to an UNCREATED status (faster than clear_value)")        
 
-     // decrements an index of an array
-     .def ("dec_index", &madara::knowledge::KnowledgeRecord::dec_index,
-     "Decrements an array element at a particular index")
+    // resize an array
+    .def ("resize", &madara::knowledge::KnowledgeRecord::resize,
+      "Resizes an array to a new size")
 
-     // increments an index of an array
-     .def ("inc_index", &madara::knowledge::KnowledgeRecord::inc_index,
-     "Increments an array element at a particular index")
+    // retrieves an index of an array
+    .def ("retrieve_index", &madara::knowledge::KnowledgeRecord::retrieve_index,
+      "Retrieves an array element at a particular index")
 
-     // resize an array
-     .def ("resize", &madara::knowledge::KnowledgeRecord::resize,
-     "Resizes an array to a new size")
+    // sets a knowledge record to a double
+    .def ("set",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      double)
+      > (&madara::knowledge::KnowledgeRecord::set_value),
+      "Sets the value to a double")
 
-     // apply knowledge record to a context
-     .def ("apply", &madara::knowledge::KnowledgeRecord::apply,
-     "Apply the knowledge record to a context, given some quality and clock")
-
-     // retrieves an index of an array
-     .def ("retrieve_index", &madara::knowledge::KnowledgeRecord::retrieve_index,
-     "Retrieves an array element at a particular index")
-
-     // sets the double precision
-     .def ("set_precision", &madara::knowledge::KnowledgeRecord::set_precision,
-     "Sets the double precision, generally for to_string")
-
-     // sets fixed precision
-     .def ("set_fixed", &madara::knowledge::KnowledgeRecord::set_fixed,
-     "Set the output format for doubles to std::fixed for madara logging")
-
-     // sets scientific precision
-     .def ("set_scientific", &madara::knowledge::KnowledgeRecord::set_scientific,
-     "Sets the output format for doubles to std::scientific")
-
-     // reset the record to UNCREATED
-     .def ("reset_value", &madara::knowledge::KnowledgeRecord::reset_value,
-     "Resets the record to an UNCREATED status (faster than clear_value)")
-
-     // sets the contents of the record to a jpeg
-     .def ("set_jpeg",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     const unsigned char * new_value, size_t size
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_jpeg),
-     "Sets the value to a jpeg")
-
-     // sets the contents of the record to a file
-     .def ("set_file", 
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     const unsigned char * new_value, size_t size
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_file),
-     "Sets the value to a file's contents")
-
-     // sets a knowledge record to a double
-     .def ("set",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     double
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_value),
-     "Sets the value to a double")
-
-     // sets a knowledge record to an array of doubles
-     .def ("set",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     const std::vector <double> &
-     )
+    // sets a knowledge record to an array of doubles
+    .def ("set",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      const std::vector <double> & )
      > (&madara::knowledge::KnowledgeRecord::set_value),
      "Sets the value to an array of doubles")
 
-     // sets a knowledge record to an integer
-     .def ("set",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-       int
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_value),
-     "Sets the value to an integer")
+    // sets a knowledge record to an integer
+    .def ("set",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+       int )
+      > (&madara::knowledge::KnowledgeRecord::set_value),
+      "Sets the value to an integer")
 
-     // sets a knowledge record to an array of integer
-     .def ("set",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     const std::vector <madara::knowledge::KnowledgeRecord::Integer> &
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_value),
-     "Sets the value to an array of integers")
+    // sets a knowledge record to an array of integer
+    .def ("set",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      const std::vector <madara::knowledge::KnowledgeRecord::Integer> & )
+      > (&madara::knowledge::KnowledgeRecord::set_value),
+      "Sets the value to an array of integers")
 
-     // sets a knowledge record to a string
-     .def ("set",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     const std::string &
-     )
-     > (&madara::knowledge::KnowledgeRecord::set_value),
-     "Sets the value to a string")
+    // sets a knowledge record to a string
+    .def ("set",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      const std::string & )
+      > (&madara::knowledge::KnowledgeRecord::set_value),
+      "Sets the value to a string")
 
-     // sets a knowledge record to an Any
-     .def ("set",
+    // sets a knowledge record to an Any
+    .def ("set",
          +[](KnowledgeRecord &rec, const Any &any) {
           rec.emplace_any(any);
          },
-     "Sets the value to an Any")
+      "Sets the value to an Any")     
 
-     // sets an array index to an integer
-     .def ("set_index",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     size_t,
-     madara::knowledge::KnowledgeRecord::Integer)
-     > (&madara::knowledge::KnowledgeRecord::set_index),
-     "Sets an array index to an integer")
+    // sets the contents of the record to a file
+    .def ("set_file", 
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      const unsigned char * new_value, size_t size )
+      > (&madara::knowledge::KnowledgeRecord::set_file),
+      "Sets the value to a file's contents")    
 
-     // sets an array index to a double
-     .def ("set_index",
-     static_cast<
-     void (madara::knowledge::KnowledgeRecord::*)(
-     size_t,
-     double)
-     > (&madara::knowledge::KnowledgeRecord::set_index),
-     "Sets an array index to a double (and converts the array to double)")
+    // sets fixed precision
+    .def ("set_fixed", &madara::knowledge::KnowledgeRecord::set_fixed,
+      "Set the output format for doubles to std::fixed for madara logging")
 
-     // sets the contents of the record to a jpeg
-     .def ("size", &madara::knowledge::KnowledgeRecord::size,
-     "Returns the size of the value")
+    // sets an array index to an integer
+    .def ("set_index",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      size_t,
+      madara::knowledge::KnowledgeRecord::Integer)
+      > (&madara::knowledge::KnowledgeRecord::set_index),
+      "Sets an array index to an integer")
 
-     // returns true if record exists
-     .def ("exists", &madara::knowledge::KnowledgeRecord::exists,
-     "Returns whether the knowledge has been set/modified/created")
+    // sets an array index to a double
+    .def ("set_index",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      size_t,
+      double)
+      > (&madara::knowledge::KnowledgeRecord::set_index),
+      "Sets an array index to a double (and converts the array to double)")      
 
-     // show record information
-     .def ("status", &madara::knowledge::KnowledgeRecord::status,
-     "Returns the status of the record")
+    // sets the contents of the record to a jpeg
+    .def ("set_jpeg",
+      static_cast<
+      void (madara::knowledge::KnowledgeRecord::*)(
+      const unsigned char * new_value, size_t size )
+      > (&madara::knowledge::KnowledgeRecord::set_jpeg),
+      "Sets the value to a jpeg")       
 
-     // convert to a string
-     .def ("to_string", &madara::knowledge::KnowledgeRecord::to_string,
-     m_to_string_0_of_1 (
-     args ("delimiter"),
-     "Converts the record to a string"))
+    // sets the double precision
+    .def ("set_precision", &madara::knowledge::KnowledgeRecord::set_precision,
+      "Sets the double precision, generally for to_string")
 
-     // convert to an integer
-     .def ("to_integer", &madara::knowledge::KnowledgeRecord::to_integer,
+    // sets scientific precision
+    .def ("set_scientific", &madara::knowledge::KnowledgeRecord::set_scientific,
+      "Sets the output format for doubles to std::scientific")
+
+    // sets the contents of the record to a jpeg
+    .def ("size", &madara::knowledge::KnowledgeRecord::size,
+      "Returns the size of the value")
+
+    // show record information
+    .def ("status", &madara::knowledge::KnowledgeRecord::status,
+      "Returns the status of the record")
+
+    // convert to a double
+    .def ("to_double", &madara::knowledge::KnowledgeRecord::to_double,
+      "Converts the record to a double")
+
+    // convert to a std::vector of doubles
+    .def ("to_doubles", &madara::knowledge::KnowledgeRecord::to_doubles,
+      "Converts the record to an array of doubles")
+
+    // save value to a file
+    .def ("to_file", &madara::knowledge::KnowledgeRecord::to_file,
+      "Saves the value of the record to a file")     
+
+    // convert to an integer
+    .def ("to_integer", &madara::knowledge::KnowledgeRecord::to_integer,
      "Converts the record to an integer")
 
-     // convert to a std::vector of integers
-     .def ("to_integers", &madara::knowledge::KnowledgeRecord::to_integers,
-     "Converts the record to an array of integers")
+    // convert to a std::vector of integers
+    .def ("to_integers", &madara::knowledge::KnowledgeRecord::to_integers,
+      "Converts the record to an array of integers")     
 
-     // convert to a double
-     .def ("to_double", &madara::knowledge::KnowledgeRecord::to_double,
-     "Converts the record to a double")
-
-     // convert to a std::vector of doubles
-     .def ("to_doubles", &madara::knowledge::KnowledgeRecord::to_doubles,
-     "Converts the record to an array of doubles")
-
-      // save value to a file
-    .def ("to_file", &madara::knowledge::KnowledgeRecord::to_file,
-    "Saves the value of the record to a file")
+    // convert to a string
+    .def ("to_string", &madara::knowledge::KnowledgeRecord::to_string,
+      m_to_string_0_of_1 (
+      args ("delimiter"),
+      "Converts the record to a string"))
 
     // gets the type of the record
     .def ("type", &madara::knowledge::KnowledgeRecord::type,
-    "Returns the value type")
-
-    // fragments the record
-    .def ("fragment", &madara::knowledge::KnowledgeRecord::fragment,
-    "Fragments the record into components")
-
-    // checks if the record is false
-    .def ("is_false", &madara::knowledge::KnowledgeRecord::is_false,
-    "Checks if the record is false")
-
-    // checks if the record is true
-    .def ("is_true", &madara::knowledge::KnowledgeRecord::is_true,
-    "Checks if the record is true")
-
-    // checks if record is a binary file type
-    .def ("is_binary_file_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_binary_file_type),
-    "Checks if the record is a binary file type")
-
-    // checks if record is a double type
-    .def ("is_double_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_double_type),
-    "Checks if the record is a double type")
-
-    // checks if record is a file type
-    .def ("is_file_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_file_type),
-    "Checks if the record is a file type")
-
-    // checks if the record is an image type
-    .def ("is_image_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_image_type),
-    "Checks if the record is an image type")
-
-    // checks if the record is an integer type
-    .def ("is_integer_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_integer_type),
-    "Checks if the record is an integer type")
-
-    // checks if the record is a string type
-    .def ("is_string_type",
-    static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
-    &madara::knowledge::KnowledgeRecord::is_string_type),
-    "Checks if the record is a string type")
+      "Returns the value type")
 
     // overloaded operators
     .def (self < self)
@@ -850,9 +862,6 @@ void define_knowledge (void)
    //.def ("to_unmanaged_buffer", &madara::knowledge::KnowledgeRecord::to_unmanaged_buffer)
 
 
-
-
-
   /********************************************************
     * KnowledgeReferenceSettings definitions
     ********************************************************/
@@ -904,6 +913,20 @@ void define_knowledge (void)
     .def_readwrite ("clock_increment",
       	&madara::knowledge::KnowledgeUpdateSettings::clock_increment,
         "Integer increment for updates to Lamport clocks")
+    .def_readwrite ("treat_locals_as_globals",
+      	&madara::knowledge::KnowledgeUpdateSettings::treat_locals_as_globals,
+        "Toggle whether updates to local variables are treated as"
+        "global variables that should be sent over the transport. It"
+        "should be stressed that this is dangerous and should only"
+        "be used for debugging. If you toggle this to true, all local"
+        "variables will be sent over the network where they will"
+        "overwrite local variables in remote systems, unless the"
+        "remote system filters out the local variable changes with"
+        "an on-receive filter")
+    .def_readwrite ("stream_changes",
+      	&madara::knowledge::KnowledgeUpdateSettings::stream_changes,
+        "Toggle for streaming support. If this is true, all changes"
+        "will be streamed to the attached streamer, if any")
   ; // end class KnowledgeUpdateSettings
           
   /********************************************************
@@ -961,27 +984,46 @@ void define_knowledge (void)
     ********************************************************/
     
   class_<madara::knowledge::Variables> ("Variables", init <> ())
-      
-    // prints all knowledge variables
-    .def ("expand_statement",
-      &madara::knowledge::Variables::expand_statement,
-      "Expand a statement")
-        
-    // evaluate an expression
-    .def( "print",
+
+    // add list of current modified list
+    .def ("add_modifieds",
+      &madara::knowledge::KnowledgeBase::add_modifieds,
+      "Adds a list of VariableReferences to the current modified list")        
+
+    // modifies all global variables
+    .def ("apply_modified",
+      &madara::knowledge::Variables::apply_modified,
+      "Applies modified to all global variables")
+
+    // compile prototype
+    .def ("compile",
+      &madara::knowledge::Variables::compile,
+      "Compiles a KaRL expression into an expression tree. Always do this"
+      "before calling evaluate because it puts the expression into an"
+      "optimized format. Best practice is to save the CompiledExpression"
+      "in a global variable or in some kind of persistent store. Pair with"
+      "expand_statement if you know that variable expansion is used but"
+      "the variable values that are expanded never change (e.g. an id that"
+      "is set through the command line and thus stays the same after it is"
+      "initially set")     
+
+    // decrements the value of a variable
+    .def( "dec",
       static_cast<
-        void (madara::knowledge::Variables::*)(
-          unsigned int) const
-      > (&madara::knowledge::Variables::print),
-      "Prints all knowledge in the context") 
-        
-    // evaluate an expression
-    .def( "print",
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const std::string &,
+          const madara::knowledge::KnowledgeUpdateSettings &)
+      > (&madara::knowledge::Variables::dec),
+      "Atomically decrements the value of the variable")        
+
+    // decrements the value of a variable
+    .def( "dec",
       static_cast<
-        void (madara::knowledge::Variables::*)(
-          const std::string &, unsigned int) const
-      > (&madara::knowledge::Variables::print),
-      "Prints a statement") 
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const madara::knowledge::VariableReference &,
+          const madara::knowledge::KnowledgeUpdateSettings &)
+      > (&madara::knowledge::Variables::dec),
+      "Atomically decrements the value of the variable") 
 
     // evaluate an expression
     .def( "evaluate",
@@ -994,6 +1036,40 @@ void define_knowledge (void)
         args("expression", "settings"),
         "Evaluates an expression"))
 
+    // evaluate an expression
+    .def( "evaluate",
+      static_cast<
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          madara::knowledge::CompiledExpression &,
+          const madara::knowledge::KnowledgeUpdateSettings &)
+      > (&madara::knowledge::Variables::evaluate),
+        m_eval_1_of_2 (
+        args("expression", "settings"),
+        "Evaluates an expression"))      
+
+    // check to see if variable exists
+    .def( "exists",
+      static_cast<
+        bool (madara::knowledge::Variables::*)(
+          const std::string &, 
+          const madara::knowledge::KnowledgeReferenceSettings &) const 
+      > (&madara::knowledge::Variables::exists),
+      "Checks if a knowledge location exists in the context") 
+        
+    // check to see if variable exists
+    .def( "exists",
+      static_cast<
+        bool (madara::knowledge::Variables::*)(
+          const madara::knowledge::VariableReference &,
+          const madara::knowledge::KnowledgeReferenceSettings &) const
+      > (&madara::knowledge::Variables::exists),
+      "Checks if a knowledge variable exists in the context") 
+
+    // prints all knowledge variables
+    .def ("expand_statement",
+      &madara::knowledge::Variables::expand_statement,
+      "Expand a statement") 
+
     // get a knowledge record
     .def( "get",
       static_cast<
@@ -1003,8 +1079,69 @@ void define_knowledge (void)
       > (&madara::knowledge::Variables::get),
       m_get_1_of_2 (
         args("key", "settings"),
-        "Retrieves a knowledge record"))
-          
+        "Retrieves the value of a variable"))
+
+    // get a knowledge record
+    .def( "get",
+      static_cast<
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const madara::knowledge::VariableReference &,
+          const madara::knowledge::KnowledgeReferenceSettings &)
+      > (&madara::knowledge::Variables::get),
+      m_get_1_of_2 (
+        args("variable", "settings"),
+        "Retrieves the value of a variable"))
+
+    // converts to a string
+    .def ("get_ref",
+      &madara::knowledge::Variables::get_ref,
+      "Retrieves the value of a variable")
+
+    // get matches in an iterable form
+    .def ("get_matches",
+      &madara::knowledge::Variables::get_matches,
+      "Creates an iteration of VariableReferences to all keys matching"
+      "the prefix and suffix")
+
+    // increments the value of a variable
+    .def( "inc",
+      static_cast<
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const std::string &,
+          const madara::knowledge::KnowledgeUpdateSettings &)
+      > (&madara::knowledge::Variables::inc),
+      "Atomically increments the value of the variable") 
+
+    // increments the value of a variable
+    .def( "inc",
+      static_cast<
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const madara::knowledge::VariableReference &,
+          const madara::knowledge::KnowledgeUpdateSettings &)
+      > (&madara::knowledge::Variables::inc),
+      "Atomically increments the value of the variable")  
+
+    // Loads the context from a file
+    .def ("load_context",
+      &madara::knowledge::Variables::load_context,
+      "Loads the context from a file")   
+
+    // print statement
+    .def( "print",
+      static_cast<
+        void (madara::knowledge::Variables::*)(
+          unsigned int) const
+      > (&madara::knowledge::Variables::print),
+      "Prints all knowledge in the context") 
+        
+    // print statement
+    .def( "print",
+      static_cast<
+        void (madara::knowledge::Variables::*)(
+          const std::string &, unsigned int) const
+      > (&madara::knowledge::Variables::print),
+      "Prints a statement")       
+
     // get a knowledge record at an index
     .def( "retrieve_index",
       static_cast<
@@ -1016,7 +1153,34 @@ void define_knowledge (void)
       m_retrieve_index_2_of_3 (
         args("key", "index", "settings"),
         "Retrieves a knowledge record from an index"))
-          
+
+    // get a knowledge record at an index
+    .def( "retrieve_index",
+      static_cast<
+        madara::knowledge::KnowledgeRecord (madara::knowledge::Variables::*)(
+          const VariableReference &,
+            size_t,
+            const madara::knowledge::KnowledgeReferenceSettings &)
+      > (&madara::knowledge::Variables::retrieve_index),
+      m_retrieve_index_2_of_3 (
+        args("key", "index", "settings"),
+        "Retrieves a knowledge record from an index")) 
+
+    // save context file to karl
+    .def ("save_as_karl",
+      &madara::knowledge::Variables::save_as_karl,
+      "Saves the context to a file as karl assignments, rather than binary")
+
+    // save a checkpoint to a file
+    .def ("save_checkpoint",
+      &madara::knowledge::Variables::save_checkpoint,
+      "Saves a checkpoint of a list of changes to a file")        
+
+    // save context to a file
+    .def ("save_context",
+      &madara::knowledge::Variables::save_context,
+      "Saves the context to a file")
+
     // sets a knowledge record to a double
     .def( "set",
       static_cast<
@@ -1065,7 +1229,30 @@ void define_knowledge (void)
           const std::string &,
           const madara::knowledge::KnowledgeUpdateSettings &)
       > (&madara::knowledge::Variables::set),
-      "sets a knowledge record to a string") 
+      "sets a knowledge record to a string")  
+
+    // fill a variable map with knowledge records
+    .def ("to_map",
+      &madara::knowledge::Variables::to_map,
+      "Fills a variable map with Knowledge Records that match an expression."
+      "At the moment, this expression must be of the form 'subject'")           
+
+    // converts to a string
+    .def ("to_string",
+      &madara::knowledge::Variables::to_string,
+      "Converts to string")  
+
+    // fill a vector with knowledge records
+    .def ("to_vector",
+      &madara::knowledge::Variables::to_vector,
+      "Fills a vector with Knowledge Records that begin with a common subject"
+      "and have a finite range of integer values")
+
+    // write a file to a location
+    .def ("write_file",
+      &madara::knowledge::Variables::write_file,
+      "Write a file from the context to a specified location")
+
   ;
     
   /********************************************************
@@ -1076,342 +1263,7 @@ void define_knowledge (void)
         "FunctionArguments", "List of arguments to a function")
   ;
     
-  /********************************************************
-    * KnowledgeBase definitions
-    ********************************************************/
  
-  class_<madara::knowledge::KnowledgeBase> ("KnowledgeBase",
-    "Network-enabled, thread-safe knowledge context", init <> ())
-      
-    // define constructors
-    .def (init <const std::string &,
-          const madara::transport::TransportSettings &> ())
-    
-    // define constructors
-    .def (init <const madara::knowledge::KnowledgeBase &> ())
-
-    // defines a python function
-    .def( "define_function",
-      static_cast<
-        void (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          object)
-      > (&madara::knowledge::KnowledgeBase::define_function),
-      "defines a named function that can be called within evaluates")
-        
-    // evaluate an expression
-    .def( "evaluate",
-      static_cast<
-        madara::knowledge::KnowledgeRecord (madara::knowledge::KnowledgeBase::*)(
-          const std::string &, const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::evaluate),
-        m_eval_1_of_2 (
-        args("expression", "settings"),
-        "Evaluates an expression"))
-      
-    // expands a statement with variable expansion
-    .def ("expand_statement",
-      &madara::knowledge::KnowledgeBase::expand_statement,
-      "Expand a statement")
-            
-    // get a knowledge record
-    .def( "get",
-      static_cast<
-        madara::knowledge::KnowledgeRecord (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const madara::knowledge::KnowledgeReferenceSettings &)
-      > (&madara::knowledge::KnowledgeBase::get),
-      m_get_1_of_2 (
-        args("key", "settings"),
-        "Retrieves a knowledge record"))
-        
-    // expands and prints a statement
-    .def ("load_context",
-      static_cast<int64_t (madara::knowledge::KnowledgeBase::*)(
-        const std::string &,
-        bool,
-        const madara::knowledge::KnowledgeUpdateSettings &)
-      > (&madara::knowledge::KnowledgeBase::load_context),
-      m_load_context_1_of_3 (
-        args("filename", "use_id", "settings"),
-        "Loads a variable context from a file"))
-          
-    // expands and prints a statement
-    .def ("load_context",
-      static_cast<int64_t (madara::knowledge::KnowledgeBase::*)(
-        madara::knowledge::CheckpointSettings &,
-        const madara::knowledge::KnowledgeUpdateSettings &)
-      > (&madara::knowledge::KnowledgeBase::load_context),
-      m_load_context_1_of_2 (
-        args("checkpoint_settings", "update_settings"),
-        "Loads a variable context from a file with settings "
-        "for checkpoint and knowledge updates"))
-          
-    // locks the knowledge base from updates from other threads
-    .def ("lock",
-      &madara::knowledge::KnowledgeBase::lock,
-      "Locks the knowledge base from updates from other threads")
-        
-    // evaluate an expression
-    .def( "print",
-      static_cast<
-        void (madara::knowledge::KnowledgeBase::*)(
-          unsigned int) const
-      > (&madara::knowledge::KnowledgeBase::print),
-      m_print_0_of_1 (
-        args("level"), "Prints all variables in the knowledge base"))
-        
-    // evaluate an expression
-    .def( "print",
-      static_cast<
-        void (madara::knowledge::KnowledgeBase::*)(
-          const std::string &, unsigned int) const
-      > (&madara::knowledge::KnowledgeBase::print),
-      m_print_1_of_2 (
-        args("statement", "level"), "Expands and prints a statement"))
-
-    // prints all knowledge variables
-    .def ("print_knowledge",
-      &madara::knowledge::KnowledgeBase::print_knowledge,
-      m_print_knowledge_0_of_1 (
-        args("level"),
-        "Alias of print(level). Prints all variables in the knowledge base"))
-
-    // reading a file
-    .def( "read_file",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const std::string &,
-          const madara::knowledge::EvalSettings & ) 
-      > (&madara::knowledge::KnowledgeBase::read_file),
-      m_read_file_2_of_3 (
-        args("knowledge_key", "filename", "settings"), 
-        "Read a file into the knowledge base"))
-        
-    // reading a file
-    .def( "read_file",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const madara::knowledge::VariableReference &,
-          const std::string &,
-          const madara::knowledge::EvalSettings & ) 
-      > (&madara::knowledge::KnowledgeBase::read_file),
-      m_read_file_2_of_3 (
-        args("variable","filename", "settings"), 
-        "Read a file into the knowledge base"))
-
-    // get a knowledge record at an index
-    .def( "retrieve_index",
-      static_cast<
-        madara::knowledge::KnowledgeRecord (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-            size_t,
-            const madara::knowledge::KnowledgeReferenceSettings &)
-      > (&madara::knowledge::KnowledgeBase::retrieve_index),
-      m_retrieve_index_2_of_3 (
-        args("key", "index", "settings"),
-        "Retrieves a knowledge record from an index"))
-              
-    // saves the context as JSON
-    .def ("save_as_json",
-      static_cast<int64_t
-        (madara::knowledge::KnowledgeBase::*)(
-          const madara::knowledge::CheckpointSettings &) const
-      > (&madara::knowledge::KnowledgeBase::save_as_json),
-        m_save_as_json_1_of_1 (
-        args("settings"),
-        "Saves the context in JSON markup"))
-         
-    // saves the context as karl
-    .def ("save_as_karl",
-      static_cast<int64_t
-        (madara::knowledge::KnowledgeBase::*)(
-          const madara::knowledge::CheckpointSettings &) const
-      > (&madara::knowledge::KnowledgeBase::save_as_karl),
-        m_save_as_karl_1_of_1 (
-        args("settings"),
-        "Saves the context as a human-readable KaRL script"))
-         
-    // saves the context as binary
-    .def ("save_context",
-      static_cast<int64_t
-        (madara::knowledge::KnowledgeBase::*)(
-          madara::knowledge::CheckpointSettings &) const
-      > (&madara::knowledge::KnowledgeBase::save_context),
-        m_save_context_1_of_1 (
-        args("settings"),
-        "Saves the context to a file with settings "))
-           
-    // saves a diff of the context as binary
-    .def ("save_checkpoint",
-      static_cast<int64_t
-        (madara::knowledge::KnowledgeBase::*)(
-          madara::knowledge::CheckpointSettings &) const
-      > (&madara::knowledge::KnowledgeBase::save_checkpoint),
-        m_save_checkpoint_1_of_1 (
-        args("settings"),
-        "Saves a diff of the context to a file with settings "))
-          
-    // Sends all modified variables through the attached transports
-    .def( "send_modifieds",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::send_modifieds),
-      m_send_modifieds_0_of_2 (
-        args("prefix", "settings"),
-        "Sends all modified variables through the attached transports."))
-
-    // sets a knowledge record to a double
-    .def( "set",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          double,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::set),
-      m_set_2_of_3 (
-        args("key", "value", "settings"),
-        "Sets a knowledge record to a double"))
-        
-    // sets a knowledge record to an array of doubles
-    .def( "set",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const std::vector <double> &,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::set),
-      m_set_2_of_3 (
-        args("key", "value", "settings"),
-        "Sets a knowledge record to an array of doubles"))
-        
-    // sets a knowledge record to an integer
-    .def( "set",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          madara::knowledge::KnowledgeRecord::Integer,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::set),
-      m_set_2_of_3 (
-        args("key", "value", "settings"),
-        "Sets a knowledge record to an integer"))
-        
-    // sets a knowledge record to an array of integer
-    .def( "set",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const std::vector <madara::knowledge::KnowledgeRecord::Integer> &,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::set),
-      m_set_2_of_3 (
-        args("key", "value", "settings"),
-        "Sets a knowledge record to an array of integers"))
-        
-    // sets a knowledge record to a string
-    .def( "set",
-      static_cast<
-        int (madara::knowledge::KnowledgeBase::*)(
-          const std::string &,
-          const std::string &,
-          const madara::knowledge::EvalSettings &)
-      > (&madara::knowledge::KnowledgeBase::set),
-      m_set_2_of_3 (
-        args("key", "value", "settings"),
-        "Sets a knowledge record to a string"))
-
-    // sets a knowledge record to an Any
-    .def( "set",
-        +[](KnowledgeBase &kb,
-            const std::string &key,
-            const Any &value,
-            const madara::knowledge::EvalSettings &settings)
-        {
-          kb.emplace_any(key, settings, value);
-        },
-        "Sets a knowledge record to an Any")
-
-    // sets a knowledge record to an Any
-    .def( "set",
-        +[](KnowledgeBase &kb,
-            const std::string &key,
-            const Any &value)
-        {
-          kb.emplace_any(key, value);
-        },
-        "Sets a knowledge record to an Any")
-        
-    // sets an array index to an integer
-    // .def( "set_index",
-    //   static_cast<
-    //     int (madara::knowledge::KnowledgeBase::*)(
-    //       const std::string &,
-    //       size_t,
-    //       madara::knowledge::KnowledgeRecord::Integer,
-    //       const madara::knowledge::EvalSettings &)
-    //   > (&madara::knowledge::KnowledgeBase::set_index),
-    //   m_set_index_2_of_3 (
-    //     args("key", "value", "settings"),
-    //     "Sets an array index to an integer"))
-        
-    // sets an array index to a double
-    // .def( "set_index",
-    //   static_cast<
-    //     int (madara::knowledge::KnowledgeBase::*)(
-    //       const std::string &,
-    //       size_t,
-    //       double,
-    //       const madara::knowledge::EvalSettings &)
-    //   > (&madara::knowledge::KnowledgeBase::set_index),
-    //   m_set_index_2_of_3 (
-    //     args("key", "value", "settings"),
-    //     "Sets an array index to a double"))
-            
-    // unlocks the knowledge base
-    .def ("unlock",
-      &madara::knowledge::KnowledgeBase::unlock,
-      "Unlocks the knowledge base and allows other threads to access")
-  
-    // wait on an expression
-    .def( "wait",
-      static_cast<
-        madara::knowledge::KnowledgeRecord (madara::knowledge::KnowledgeBase::*)(
-          const std::string &, const madara::knowledge::WaitSettings &)
-      > (&madara::knowledge::KnowledgeBase::wait),
-        m_wait_1_of_2 (
-        args("expression", "settings"),
-        "Waits for an expression to evaluate to true"))
-    .def("to_map",
-      +[](madara::knowledge::KnowledgeBase &kb, const std::string &prefix)
-      {
-        return kb.to_map(prefix);
-      }, "Get all records starting with the given prefix and return as "
-         "KnowledgeRecordMap.")
-    .def("to_map",
-      +[](madara::knowledge::KnowledgeBase &kb, const std::string &prefix,
-          const std::string & delimiter,
-          const std::string & suffix
-        )
-      {
-        std::vector <std::string> next_keys;
-        std::map <std::string, madara::knowledge::KnowledgeRecord> result;
-        kb.to_map(prefix, delimiter, suffix, next_keys, result, false);
-        return result;
-      },
-      "Fills a variable map with list of keys according to a matching prefix,\n"
-      "suffix, and delimiter hierarchy. This is useful for understanding the\n"
-      "logical hierarchy of your variables\n"
-      "param 0 prefix: Text that must be present at the front of the key\n"
-      "param 1 delimiter: Text that signifies a logical boundary in hierarchy If\n"
-      "                     empty, no check is performed.\n"
-      "param 2 suffix: Text that must be present at the end of the key. If\n"
-      "                     empty, no check is performed.\n"
-      "returns a KnowledgeRecordMap containing the matching keys with values")
-  ;
 
   class_ <std::vector <madara::knowledge::KnowledgeRecord> > ("KnowledgeRecordVector")
     .def(vector_indexing_suite<std::vector<madara::knowledge::KnowledgeRecord> >());
@@ -1421,9 +1273,11 @@ void define_knowledge (void)
     .def(map_indexing_suite<std::map <
       std::string, madara::knowledge::KnowledgeRecord> >());
 
+  // define complex classes in the madara.knowledge module space
+  define_knowledge_base ();
+
   // define madara.knowledge.containers
   define_knowledge_containers ();
-
 }
 
 #endif // _MADARA_PYTHON_PORT_MADARA_KNOWLEGE_CPP_

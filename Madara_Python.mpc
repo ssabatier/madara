@@ -15,10 +15,12 @@ project (MADARA_Python) : using_madara, port/python/using_python, using_lz4, usi
 
   Header_Files {
     port/python/src
+    port/python/src/madara/knowledge
   }
 
   Source_Files {
     port/python/src
+    port/python/src/madara/knowledge
   }
 }
 
