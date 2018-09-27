@@ -340,11 +340,6 @@ void define_knowledge_containers (void)
     
     // methods
 
-    // retrieves the number of records
-    .def ("count",
-      &madara::knowledge::containers::NativeCircularBufferConsumer::count,
-      "Returns the number of records in the buffer")
-
     // get latest
     .def ("consume", 
       static_cast<
@@ -353,12 +348,82 @@ void define_knowledge_containers (void)
           void
         ) const
       > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume),
-      "Consumes earliest record in the buffer")
+        "Consumes the record at the local index (not the producer index)")
+
+     // consume record at local index
+    .def ("consume", 
+      static_cast<
+        madara::knowledge::KnowledgeRecord
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t &
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume),
+      "Consumes the record at the local index (not the producer index)")
+
+     // get latest
+    .def ("consume_latest", 
+      static_cast<
+        std::vector <madara::knowledge::KnowledgeRecord>
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t 
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume_latest),
+      "Consumes the latest record at the local index (not the producer index)")
+
+     // get latest
+    .def ("consume_latest", 
+      static_cast<
+        madara::knowledge::KnowledgeRecord
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          void 
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume_latest),
+      "Consumes the latest record at the local index (not the producer index)")
+
+     // get latest
+    .def ("consume_latest", 
+      static_cast<
+        std::vector <madara::knowledge::KnowledgeRecord>
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t, size_t &
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume_latest),
+      "Consumes the latest record at the local index (not the producer index)")
+
+     // consumes earliest records
+    .def ("consume_many", 
+      static_cast<
+        std::vector <madara::knowledge::KnowledgeRecord>
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume_many),
+      "Consumes (earliest) records from the local index")
+
+     // consumes earliest records
+    .def ("consume_many", 
+      static_cast<
+        std::vector <madara::knowledge::KnowledgeRecord>
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t, size_t &
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::consume_many),
+      "Consumes (earliest) records from the local index")
+
+     // retrieves the number of records
+    .def ("count",
+      &madara::knowledge::containers::NativeCircularBufferConsumer::count,
+      "Returns the number of records in the buffer")
 
     // gets the underlying prefix/name
     .def ("get_dropped",
       &madara::knowledge::containers::NativeCircularBufferConsumer::get_dropped,
       "Returns the number of records dropped since last consume")
+
+    // get the local index
+    .def ("get_index",
+      &madara::knowledge::containers::NativeCircularBufferConsumer::get_index,
+      "Gets the local index")
 
     // gets the underlying prefix/name
     .def ("get_name",
@@ -386,6 +451,26 @@ void define_knowledge_containers (void)
       > (&madara::knowledge::containers::NativeCircularBufferConsumer::inspect),
       "Inspects the records at the indicated position in the buffer. "
       "This position can be positive or negative from current position")
+
+    // get latest
+    .def ("peek_latest", 
+      static_cast<
+        std::vector <madara::knowledge::KnowledgeRecord>
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          size_t
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::peek_latest),
+      "Consumes the record at the local index (not the producer index)")
+
+     // get latest
+    .def ("peek_latest", 
+      static_cast<
+        madara::knowledge::KnowledgeRecord
+        (madara::knowledge::containers::NativeCircularBufferConsumer::*)(
+          void
+        ) const
+      > (&madara::knowledge::containers::NativeCircularBufferConsumer::peek_latest),
+      "Consumes the record at the local index (not the producer index)")
 
     // returns the remaining records
     .def ("remaining",
@@ -429,10 +514,13 @@ void define_knowledge_containers (void)
       &madara::knowledge::containers::NativeCircularBufferConsumer::size,
       "Returns the size of the buffer")
 
-    // .....
+    // get a knowledge record
     .def ("get_record",
       &madara::knowledge::containers::NativeCircularBufferConsumer::get_record,
-      ".....")
+      "Get the KnowledgeRecord this container refers to. While this returns by"
+      "copy, it will share the same circular buffer for read operations, but"
+      "any modificatiosn will result in a copy and not be reflected in the"
+      "original inside the KnowledgeBase")
 
   ;
 
