@@ -628,7 +628,7 @@ void define_knowledge (void)
      > (&madara::knowledge::KnowledgeRecord::set_value),
      "Sets the value to an array of doubles")
 
-    // sets a knowledge record to an integer
+    sets a knowledge record to an integer
     .def ("set",
       static_cast<
       void (madara::knowledge::KnowledgeRecord::*)(
