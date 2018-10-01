@@ -551,7 +551,7 @@ void define_knowledge (void)
  
      // checks if record is any type
     .def ("is_any_type",
-      static_cast<bool (madara::knowledge::KnowledgeRecord::*)(void) const> (
+      static_cast<bool(madara::knowledge::KnowledgeRecord::*)(void) const> (
       &madara::knowledge::KnowledgeRecord::is_any_type),
       "returns if the record is Any type")            
 
