@@ -7,13 +7,13 @@ from madara.knowledge import *
 
 geo = capnp.load(os.environ["MADARA_ROOT"] + "/tests/capnfiles/Geo.capnp")
 
-Any.register_int32("i32");
+Any.register_int32("i32")
 Any.register_class("Point", geo.Point)
 Any.register_class("Pose", geo.Pose)
 
 a = Any("i32")
 
-a.assign(10);
+a.assign(10)
 
 print(a.to_integer())
 

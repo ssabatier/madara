@@ -16,11 +16,11 @@
 #include "madara/logger/GlobalLogger.h"
 
 #ifdef _USE_SSL_
-  #include "madara/filters/ssl/AESBufferFilter.h"
+#include "madara/filters/ssl/AESBufferFilter.h"
 #endif
 
 #ifdef _USE_LZ4_
-  #include "madara/filters/lz4/LZ4BufferFilter.h"
+#include "madara/filters/lz4/LZ4BufferFilter.h"
 #endif
 
 #include "capnp/schema-parser.h"
@@ -35,15 +35,16 @@ namespace filters = madara::filters;
 namespace logger = madara::logger;
 namespace threads = madara::threads;
 
-typedef knowledge::KnowledgeRecord::Integer  Integer;
-typedef std::vector <std::string>            StringVector;
+typedef knowledge::KnowledgeRecord::Integer Integer;
+typedef std::vector<std::string> StringVector;
 
 // checkpoint settings
 knowledge::CheckpointSettings load_checkpoint_settings;
 
 // options for analysis
 bool print_knowledge = false;
-std::vector <std::string> print_prefixes;
+bool print_stats = false;
+std::vector<std::string> print_prefixes;
 std::string save_file;
 
 // Capnp types and globals
@@ -52,6 +53,11 @@ std::vector<std::string> capnp_msg;
 std::vector<std::string> capnp_type;
 bool capnp_msg_type_param_flag = false;
 bool capnp_import_dirs_flag = false;
+bool summary = true;
+
+// check for stats
+std::string checkfile;
+std::string check;
 
 /**
  * Class for keeping track of updates on a variable
@@ -59,25 +65,39 @@ bool capnp_import_dirs_flag = false;
 class VariableStats
 {
 public:
-  VariableStats ()
-  : name (""), first (0), last (0), updates (0), bytes (0)
-  {
+  VariableStats() : name(""), first(0), last(0), updates(0), bytes(0) {}
 
-  }
-
-  std::ostream & print (std::ostream & output)
+  std::ostream& print(std::ostream& output)
   {
     uint64_t total_ns = last - first;
     uint64_t total_s = total_ns / 1000000000;
     double hertz = (double)updates / total_s;
     double kbs = (double)bytes / 1000 / total_s;
 
-    output << std::fixed << std::setprecision (2);
+    output << std::fixed << std::setprecision(2);
     output << name << ": " << updates << " updates ";
     output << " (@" << hertz << "hz) (@" << kbs << "KB/s) (Size: Min ";
     output << min_size << " B, Max: " << max_size << " B)\n";
 
     return output;
+  }
+
+  void save(knowledge::KnowledgeBase kb)
+  {
+    uint64_t total_ns = last - first;
+    uint64_t total_s = total_ns / 1000000000;
+    double hertz = (double)updates / total_s;
+    double kbs = (double)bytes / 1000 / total_s;
+
+    kb.set(name + ".first", (int64_t)first);
+    kb.set(name + ".last", (int64_t)last);
+    kb.set(name + ".updates", (int64_t)updates);
+    kb.set(name + ".bytes", (int64_t)bytes);
+    kb.set(name + ".max_size", (int64_t)max_size);
+    kb.set(name + ".min_size", (int64_t)min_size);
+    kb.set(name + ".duration", (int64_t)total_ns);
+    kb.set(name + ".hz", hertz);
+    kb.set(name + ".kbs", kbs);
   }
 
   std::string name;
@@ -90,16 +110,37 @@ public:
 };
 
 /// convenience typedef for Variable updates
-typedef std::map <std::string, VariableStats> VariableUpdates;
+typedef std::map<std::string, VariableStats> VariableUpdates;
 
 // handle command line arguments
-void handle_arguments (int argc, char ** argv)
+void handle_arguments(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i)
   {
-    std::string arg1 (argv[i]);
+    std::string arg1(argv[i]);
 
-    if (arg1 == "-f" || arg1 == "--logfile")
+    if (arg1 == "-c" || arg1 == "--check")
+    {
+      if (i + 1 < argc)
+      {
+        check = argv[i + 1];
+        std::cout << "  Loading stats check from command line " << check
+                  << "\n";
+      }
+
+      ++i;
+    }
+    else if (arg1 == "-cf" || arg1 == "--check-file")
+    {
+      if (i + 1 < argc)
+      {
+        checkfile = argv[i + 1];
+        std::cout << "  Loading stats check from file " << checkfile << "\n";
+      }
+
+      ++i;
+    }
+    else if (arg1 == "-f" || arg1 == "--logfile")
     {
       if (i + 1 < argc)
       {
@@ -119,21 +160,25 @@ void handle_arguments (int argc, char ** argv)
       if (i + 1 < argc)
       {
         for (int j = i + 1;
-             j < argc && strlen (argv[j]) > 0 && argv[j][0] != '-'; ++i, ++j)
+             j < argc && strlen(argv[j]) > 0 && argv[j][0] != '-'; ++i, ++j)
         {
           std::cout << "  Limiting results to prefix " << argv[j] << "\n";
-          print_prefixes.push_back (argv[j]);
+          print_prefixes.push_back(argv[j]);
         }
       }
+    }
+    else if (arg1 == "-ks" || arg1 == "--print-stats")
+    {
+      print_stats = true;
     }
     else if (arg1 == "-l" || arg1 == "--level")
     {
       if (i + 1 < argc)
       {
         int level;
-        std::stringstream buffer (argv[i + 1]);
+        std::stringstream buffer(argv[i + 1]);
         buffer >> level;
-        logger::global_logger->set_level (level);
+        logger::global_logger->set_level(level);
         std::cout << "  Setting log level to " << level << "\n";
       }
 
@@ -143,7 +188,7 @@ void handle_arguments (int argc, char ** argv)
     {
       if (i + 1 < argc)
       {
-        load_checkpoint_settings.prefixes.push_back (argv[i + 1]);
+        load_checkpoint_settings.prefixes.push_back(argv[i + 1]);
         std::cout << "  Limiting load to prefix " << argv[i + 1] << "\n";
       }
 
@@ -153,37 +198,37 @@ void handle_arguments (int argc, char ** argv)
     {
       if (i + 1 < argc)
       {
-        std::stringstream buffer (argv[i + 1]);
+        std::stringstream buffer(argv[i + 1]);
         buffer >> load_checkpoint_settings.buffer_size;
         std::cout << "  Setting load size to " << argv[i + 1] << "\n";
       }
 
       ++i;
     }
-    else if (arg1 == "-ni" )
+    else if (arg1 == "-ni")
     {
       if (i + 1 < argc)
-      { 
+      {
         std::string dirnames = argv[i + 1];
 
         std::vector<std::string> splitters, tokens, pivot_list;
-        splitters.push_back (":");
-      
-        utility::tokenizer (dirnames, splitters, tokens, pivot_list);
+        splitters.push_back(":");
+
+        utility::tokenizer(dirnames, splitters, tokens, pivot_list);
 
         for (auto token : tokens)
         {
-          capnp_import_dirs.add (token);
+          capnp_import_dirs.add(token);
         }
 
         capnp_import_dirs_flag = true;
       }
       else
       {
-        //print out error log
-        madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ERROR,
-          "ERROR: parameter -ni dir1[:dir2:dir3]\n");
-        exit (-1);
+        // print out error log
+        madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+            "ERROR: parameter -ni dir1[:dir2:dir3]\n");
+        exit(-1);
       }
 
       ++i;
@@ -195,32 +240,32 @@ void handle_arguments (int argc, char ** argv)
         std::string msgtype_pair = argv[i + 1];
 
         std::vector<std::string> splitters, tokens, pivot_list;
-        splitters.push_back (":");
-      
-        utility::tokenizer (msgtype_pair, splitters, tokens, pivot_list);
+        splitters.push_back(":");
 
-        if (tokens.size () == 2)
+        utility::tokenizer(msgtype_pair, splitters, tokens, pivot_list);
+
+        if (tokens.size() == 2)
         {
-          capnp_msg.push_back (tokens[0]);
-          capnp_type.push_back (tokens[1]);
+          capnp_msg.push_back(tokens[0]);
+          capnp_type.push_back(tokens[1]);
         }
         else
         {
-          //print out error log
-          madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ERROR,
-            "ERROR: parameter -n requires two tokens, "
-            "in the form 'msg:type'\n");
-          exit (-1);
+          // print out error log
+          madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+              "ERROR: parameter -n requires two tokens, "
+              "in the form 'msg:type'\n");
+          exit(-1);
         }
 
         capnp_msg_type_param_flag = true;
       }
       else
       {
-        //print out error log
-        madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ERROR,
-          "ERROR: parameter [-n|] msg:type\n");
-        exit (-1);
+        // print out error log
+        madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+            "ERROR: parameter [-n|] msg:type\n");
+        exit(-1);
       }
 
       ++i;
@@ -229,23 +274,21 @@ void handle_arguments (int argc, char ** argv)
     {
       if (i + 1 < argc)
       {
-        //capnp_import_dirs_flag && capnp_msg_type_param_flag
+        // capnp_import_dirs_flag && capnp_msg_type_param_flag
         if (!capnp_import_dirs_flag)
         {
-          //write loggercode and continue
-          madara_logger_ptr_log (
-            logger::global_logger.get (), logger::LOG_ERROR,
-            "ERROR: parameter -ni is missing or must precede -nf param\n");
+          // write loggercode and continue
+          madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+              "ERROR: parameter -ni is missing or must precede -nf param\n");
           ++i;
           continue;
         }
-        
+
         if (!capnp_msg_type_param_flag)
         {
-          //write loggercode and continue
-          madara_logger_ptr_log (
-            logger::global_logger.get (), logger::LOG_ERROR,
-            "ERROR: parameter -n is missing or must precede -nf param\n");
+          // write loggercode and continue
+          madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+              "ERROR: parameter -n is missing or must precede -nf param\n");
           ++i;
           continue;
         }
@@ -256,44 +299,46 @@ void handle_arguments (int argc, char ** argv)
 
         static capnp::SchemaParser schparser;
         capnp::ParsedSchema ps;
-        ps = schparser.parseDiskFile (
-          utility::extract_filename (filename), filename, capnp_import_dirs.asPtr ());
+        ps = schparser.parseDiskFile(utility::extract_filename(filename),
+            filename, capnp_import_dirs.asPtr());
 
         std::string msg;
         std::string typestr;
         capnp::ParsedSchema ps_type;
         size_t idx = 0;
 
-        for (idx = 0; idx < capnp_msg.size (); ++idx)
+        for (idx = 0; idx < capnp_msg.size(); ++idx)
         {
           msg = capnp_msg[idx];
           typestr = capnp_type[idx];
-          ps_type = ps.getNested (typestr);
+          ps_type = ps.getNested(typestr);
 
-          if (!madara::knowledge::AnyRegistry::register_schema (
-            capnp_msg[idx].c_str (), ps_type.asStruct ()))
+          if (!madara::knowledge::AnyRegistry::register_schema(
+                  capnp_msg[idx].c_str(), ps_type.asStruct()))
           {
-            madara_logger_ptr_log (
-              logger::global_logger.get (), logger::LOG_ERROR,
-              "CAPNP Failed on file  %s ",
-                utility::extract_filename (filename).c_str ());
+            madara_logger_ptr_log(logger::global_logger.get(),
+                logger::LOG_ERROR, "CAPNP Failed on file  %s ",
+                utility::extract_filename(filename).c_str());
           }
           else
           {
-            madara_logger_ptr_log (
-              logger::global_logger.get (), logger::LOG_TRACE,
-                 "CAPNP Loaded file  %s ",
-                 utility::extract_filename (filename).c_str ());
+            madara_logger_ptr_log(logger::global_logger.get(),
+                logger::LOG_TRACE, "CAPNP Loaded file  %s ",
+                utility::extract_filename(filename).c_str());
           }
         }
       }
       else
       {
-        madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ERROR,
-          "ERROR: parameter [-nf|--capnp] filename\n");
+        madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ERROR,
+            "ERROR: parameter [-nf|--capnp] filename\n");
       }
 
       ++i;
+    }
+    else if (arg1 == "-ns" || arg1 == "--no-summary")
+    {
+      summary = false;
     }
     else if (arg1 == "-s" || arg1 == "--save")
     {
@@ -307,49 +352,79 @@ void handle_arguments (int argc, char ** argv)
     }
     else if (arg1 == "-v" || arg1 == "--version")
     {
-      madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ALWAYS,
-        "MADARA version: %s\n",
-        utility::get_version ().c_str ());
+      madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ALWAYS,
+          "MADARA version: %s\n", utility::get_version().c_str());
     }
     else
     {
-      madara_logger_ptr_log (logger::global_logger.get (), logger::LOG_ALWAYS,
-        "\nOption %s:\n" \
-        "\nProgram summary for %s [options] [Logic]:\n\n" \
-        "Inspects STK for summary info on knowledge updates.\n\noptions:\n" \
-        "  [-f|--stk-file file]     STK file to load and analyze\n" \
-        "  [-h|--help]              print help menu (i.e., this menu)\n" \
-        "  [-k|--print-knowledge]   print final knowledge\n" \
-        "  [-kp|--print-prefix pfx] filter prints by prefix. Can be multiple.\n" \
-        "  [-ky]                    print knowledge after frequent evaluations\n" \
-        "  [-l|--level level]       the logger level (0+, higher is higher detail)\n" \
-        "  [-lcp|--load-checkpoint-prefix prfx]\n" \
-        "                           prefix of knowledge to load from checkpoint\n" \
-        "  [-ls|--load-size bytes]  size of buffer needed for file load\n" \
-        "  [-n|--capnp tag:msg_type] register tag with given message schema.\n" \
-        "                            See also -nf and -ni.\n"\
-        "  [-nf|--capnp-file]       load capnp file. Must appear after all -n and -ni.\n" \
-        "  [-ni|--capnp-import ]    add directory to capnp directory imports. "\
-        "                           Must appear before all -n and -nf.\n" \
-        "  [-s|--save file]         save the results to a file\n" \
-        "\n",
-        arg1.c_str (), argv[0]);
-      exit (0);
+      madara_logger_ptr_log(logger::global_logger.get(), logger::LOG_ALWAYS,
+          "\nOption %s:\n"
+          "\nProgram summary for %s [options] [Logic]:\n\n"
+          "Inspects STK for summary info on knowledge updates.\n\noptions:\n"
+          "  [-f|--stk-file file]     STK file to load and analyze\n"
+          "  [-h|--help]              print help menu (i.e., this menu)\n"
+          "  [-c|--check logic]       logic to evaluate to check contents.\n"
+          "                           a check is a KaRL expression that can\n"
+          "                           be a combination of variable stats.\n"
+          "                           Each variable has the following stats:.\n"
+          "                             {var}.bytes: total bytes\n"
+          "                             {var}.duration: ns between first and "
+          "last\n"
+          "                             {var}.first: ns timestamp of first "
+          "update\n"
+          "                             {var}.hz: frequency of updates in "
+          "duration\n"
+          "                             {var}.kbs: KB/s of updates within "
+          "duration\n"
+          "                             {var}.last: ns timestamp of first "
+          "update\n"
+          "                             {var}.max_size: max size of update\n"
+          "                             {var}.min_size: min size of update\n"
+          "                             {var}.updates: total num updates\n"
+          "  [-cf|--check-file file]  KaRL file with check. See -c for "
+          "options\n"
+          "  [-k|--print-knowledge]   print final knowledge\n"
+          "  [-kp|--print-prefix pfx] filter prints by prefix. Can be "
+          "multiple.\n"
+          "  [-ks|--print-stats]      print stats knowledge base contents\n"
+          "  [-ky]                    print knowledge after frequent "
+          "evaluations\n"
+          "  [-l|--level level]       the logger level (0+, higher is higher "
+          "detail)\n"
+          "  [-lcp|--load-checkpoint-prefix prfx]\n"
+          "                           prefix of knowledge to load from "
+          "checkpoint\n"
+          "  [-ls|--load-size bytes]  size of buffer needed for file load\n"
+          "  [-n|--capnp tag:msg_type] register tag with given message "
+          "schema.\n"
+          "                            See also -nf and -ni.\n"
+          "  [-nf|--capnp-file]       load capnp file. Must appear after -n "
+          "and -ni.\n"
+          "  [-ni|--capnp-import ]    add directory to capnp directory "
+          "imports. "
+          "                           Must appear before all -n and -nf.\n"
+          "  [-ns|--no-summary ]      do not print or save summary stats per "
+          "var"
+          "                           Must appear before all -n and -nf.\n"
+          "  [-s|--save file]         save the results to a file\n"
+          "\n",
+          arg1.c_str(), argv[0]);
+      exit(0);
     }
   }
 }
 
-int main (int argc, char ** argv)
+int main(int argc, char** argv)
 {
   std::cout << "Inspection settings:\n" << std::flush;
 
   // handle all user arguments
-  handle_arguments (argc, argv);
+  handle_arguments(argc, argv);
 
   knowledge::KnowledgeBase kb;
-  std::cout << "Creating CheckpointReader with file contents... " <<
-    std::flush;
-  knowledge::CheckpointReader reader (load_checkpoint_settings);
+  knowledge::KnowledgeBase stats;
+  std::cout << "Creating CheckpointReader with file contents... " << std::flush;
+  knowledge::CheckpointReader reader(load_checkpoint_settings);
   std::cout << "done\n";
 
   VariableUpdates variables;
@@ -357,27 +432,27 @@ int main (int argc, char ** argv)
   std::cout << "Iterating through updates... " << std::flush;
   while (true)
   {
-    auto cur = reader.next ();
+    auto cur = reader.next();
     if (cur.first == "")
       break;
 
-    VariableStats & variable = variables[cur.first];
+    VariableStats& variable = variables[cur.first];
 
-    uint64_t size = cur.second.size ();
+    uint64_t size = cur.second.size();
 
-    if (cur.second.is_integer_type ())
+    if (cur.second.is_integer_type())
     {
-      size *= sizeof (int64_t);
+      size *= sizeof(int64_t);
     }
-    else if (cur.second.is_double_type ())
+    else if (cur.second.is_double_type())
     {
-      size *= sizeof (double);
+      size *= sizeof(double);
     }
 
     if (variable.name == "")
     {
       variable.name = cur.first;
-      variable.first = cur.second.toi ();
+      variable.first = cur.second.toi();
       variable.min_size = size;
       variable.max_size = size;
     }
@@ -393,28 +468,78 @@ int main (int argc, char ** argv)
       }
     }
 
-    variable.last = cur.second.toi ();
+    variable.last = cur.second.toi();
     variable.bytes += size;
     ++variable.updates;
   }
   std::cout << "done\n";
 
-  if (save_file != "")
+  if (print_stats || summary || checkfile != "" || check != "")
   {
-    std::cout << "Saving results to " << save_file << "..." << std::flush;
-    std::ofstream output (save_file);
-
-    if (output)
+    if (save_file != "")
     {
+      std::cout << "Saving results to " << save_file << "..." << std::flush;
+      std::ofstream output(save_file);
+
+      if (output)
+      {
+        for (auto variable : variables)
+        {
+          bool prefix_match = print_prefixes.size() == 0;
+
+          if (!prefix_match)
+          {
+            for (auto prefix : print_prefixes)
+            {
+              if (utility::begins_with(variable.first, prefix))
+              {
+                prefix_match = true;
+                break;
+              }
+            }
+          }
+
+          if (prefix_match)
+          {
+            if (summary)
+            {
+              variable.second.print(output);
+            }
+
+            if (print_stats || check != "" || checkfile != "")
+            {
+              variable.second.save(stats);
+            }
+          }
+        }
+      }
+
+      output.close();
+      std::cout << " done\n";
+    }
+    else
+    {
+      // user has specified prefixes that must be matched
+      if (summary)
+      {
+        std::cout << "Printing results to stdout...\n" << std::flush;
+      }
+
+      if (print_stats || check != "" || checkfile != "")
+      {
+        std::cout << "Calculating stats...\n" << std::flush;
+      }
+
+      // iterate through all variables and check prefixes
       for (auto variable : variables)
       {
-        bool prefix_match = print_prefixes.size () == 0;
+        bool prefix_match = print_prefixes.size() == 0;
 
         if (!prefix_match)
         {
           for (auto prefix : print_prefixes)
           {
-            if (utility::begins_with (variable.first, prefix))
+            if (utility::begins_with(variable.first, prefix))
             {
               prefix_match = true;
               break;
@@ -424,44 +549,64 @@ int main (int argc, char ** argv)
 
         if (prefix_match)
         {
-          variable.second.print (output);
-        }
-      }
-    }
-
-    output.close ();
-    std::cout << " done\n";
-  }
-  else
-  {
-    std::cout << "Printing results to stdout...\n" << std::flush;
-    for (auto variable : variables)
-    {
-      bool prefix_match = print_prefixes.size () == 0;
-
-      if (!prefix_match)
-      {
-        for (auto prefix : print_prefixes)
-        {
-          if (utility::begins_with (variable.first, prefix))
+          // if user wants a summary, print it
+          if (summary)
           {
-            prefix_match = true;
-            break;
+            variable.second.print(std::cout);
+          }
+
+          // if we have a stats logic check, then save the stats
+          if (print_stats || check != "" || checkfile != "")
+          {
+            variable.second.save(stats);
           }
         }
       }
-
-      if (prefix_match)
-      {
-        variable.second.print (std::cout);
-      }
     }
+  }
+
+  // see if the user wants to check for variable stats
+  if (checkfile != "")
+  {
+    if (check == "")
+    {
+      check = utility::file_to_string(checkfile);
+    }
+    else
+    {
+      check += "&& (";
+      check += utility::file_to_string(checkfile);
+      check += ")";
+    }
+  }
+
+  if (print_stats)
+  {
+    std::cout << "Printing stats:\n";
+    stats.print();
   }
 
   if (print_knowledge)
   {
-    kb.print ();
+    kb.load_context(load_checkpoint_settings);
+    std::cout << "Printing final KB:\n";
+    kb.print();
   }
 
-  return 0;
+  // return value is always 0 unless check is specified
+  if (check == "" || stats.evaluate(check).is_true())
+  {
+    if (check != "")
+    {
+      std::cout << "Result: SUCCESS\n";
+    }
+
+    return 0;
+  }
+  else
+  {
+    std::cout << "Result: FAIL\n";
+
+    return 1;
+  }
 }
