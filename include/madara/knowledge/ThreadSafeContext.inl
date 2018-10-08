@@ -9,6 +9,7 @@
  */
 
 #include "madara/expression/Interpreter.h"
+#include "madara/exceptions/UninitializedException.h"
 
 #include <sstream>
 
@@ -29,6 +30,14 @@ inline KnowledgeRecord ThreadSafeContext::get(
   const KnowledgeRecord* ret = with(key, settings);
   if (ret)
   {
+    if (settings.exception_on_unitialized && !ret->exists())
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << key << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
+    }
+
     if (ret->has_history())
     {
       return ret->get_newest();
@@ -36,6 +45,16 @@ inline KnowledgeRecord ThreadSafeContext::get(
     else
     {
       return *ret;
+    }
+  }
+  else
+  {
+    if (settings.exception_on_unitialized)
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << key << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
     }
   }
   return KnowledgeRecord();
@@ -47,6 +66,14 @@ inline KnowledgeRecord ThreadSafeContext::get(const VariableReference& variable,
   const KnowledgeRecord* ret = with(variable, settings);
   if (ret)
   {
+    if (settings.exception_on_unitialized && !ret->exists())
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << variable.get_name() << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
+    }
+
     if (ret->has_history())
     {
       return ret->get_newest();
@@ -54,6 +81,16 @@ inline KnowledgeRecord ThreadSafeContext::get(const VariableReference& variable,
     else
     {
       return *ret;
+    }
+  }
+  else
+  {
+    if (settings.exception_on_unitialized)
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << variable.get_name() << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
     }
   }
   return KnowledgeRecord();
@@ -65,6 +102,14 @@ inline KnowledgeRecord ThreadSafeContext::get_actual(
   const KnowledgeRecord* ret = with(key, settings);
   if (ret)
   {
+    if (settings.exception_on_unitialized && !ret->exists())
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << key << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
+    }
+
     return *ret;
   }
   return KnowledgeRecord();
@@ -77,6 +122,14 @@ inline KnowledgeRecord ThreadSafeContext::get_actual(
   const KnowledgeRecord* ret = with(variable, settings);
   if (ret)
   {
+    if (settings.exception_on_unitialized && !ret->exists())
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << variable.get_name() << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
+    }
+
     return *ret;
   }
   return KnowledgeRecord();
@@ -109,11 +162,22 @@ inline KnowledgeRecord* ThreadSafeContext::with(
 
 // return the value of a variable
 inline KnowledgeRecord* ThreadSafeContext::with(
-    const VariableReference& variable, const KnowledgeReferenceSettings&)
+    const VariableReference& variable,
+    const KnowledgeReferenceSettings& settings)
 {
   MADARA_GUARD_TYPE guard(mutex_);
 
-  return variable.get_record_unsafe();
+  KnowledgeRecord* ret = variable.get_record_unsafe();
+
+  if (settings.exception_on_unitialized && !ret->exists())
+  {
+    std::stringstream buffer;
+    buffer << "ERROR: settings do not allow reads of unset vars and ";
+    buffer << variable.get_name() << " is uninitialized";
+    throw exceptions::UninitializedException (buffer.str ());
+  }
+
+  return ret;
 }
 
 inline const KnowledgeRecord* ThreadSafeContext::with(
@@ -135,6 +199,14 @@ inline const KnowledgeRecord* ThreadSafeContext::with(
 
   if (found != map_.end())
   {
+    if (settings.exception_on_unitialized && !found->second.exists())
+    {
+      std::stringstream buffer;
+      buffer << "ERROR: settings do not allow reads of unset vars and ";
+      buffer << found->first << " is uninitialized";
+      throw exceptions::UninitializedException (buffer.str ());
+    }
+
     return &found->second;
   }
 
@@ -143,31 +215,61 @@ inline const KnowledgeRecord* ThreadSafeContext::with(
 
 // return the value of a variable
 inline const KnowledgeRecord* ThreadSafeContext::with(
-    const VariableReference& variable, const KnowledgeReferenceSettings&) const
+    const VariableReference& variable,
+    const KnowledgeReferenceSettings& settings) const
 {
   MADARA_GUARD_TYPE guard(mutex_);
 
-  return variable.get_record_unsafe();
+  KnowledgeRecord* ret = variable.get_record_unsafe();
+
+  if (settings.exception_on_unitialized && !ret->exists())
+  {
+    std::stringstream buffer;
+    buffer << "ERROR: settings do not allow reads of unset vars and ";
+    buffer << variable.get_name() << " is uninitialized";
+    throw exceptions::UninitializedException (buffer.str ());
+  }
+
+  return ret;
 }
 
 // return the value of a variable
 inline bool ThreadSafeContext::exists(
-    const VariableReference& variable, const KnowledgeReferenceSettings&) const
+    const VariableReference& variable,
+    const KnowledgeReferenceSettings& settings) const
 {
   MADARA_GUARD_TYPE guard(mutex_);
 
-  auto record = variable.get_record_unsafe();
-  return record && record->exists();
+  auto ret = variable.get_record_unsafe();
+
+  if (settings.exception_on_unitialized && !ret->exists())
+  {
+    std::stringstream buffer;
+    buffer << "ERROR: settings do not allow reads of unset vars and ";
+    buffer << variable.get_name() << " is uninitialized";
+    throw exceptions::UninitializedException (buffer.str ());
+  }
+
+  return ret && ret->exists();
 }
 
 // return the value of a variable
 inline KnowledgeRecord ThreadSafeContext::retrieve_index(
     const VariableReference& variable, size_t index,
-    const KnowledgeReferenceSettings&)
+    const KnowledgeReferenceSettings& settings)
 {
   MADARA_GUARD_TYPE guard(mutex_);
 
   auto record = variable.get_record_unsafe();
+
+  if (settings.exception_on_unitialized && !record->exists())
+  {
+    std::stringstream buffer;
+    buffer << "ERROR: settings do not allow reads of unset vars and ";
+    buffer << variable.get_name() << " is uninitialized";
+    throw exceptions::UninitializedException (buffer.str ());
+  }
+
   if (record)
     return record->retrieve_index(index);
   else
@@ -178,6 +280,7 @@ inline KnowledgeRecord ThreadSafeContext::retrieve_index(const std::string& key,
     size_t index, const KnowledgeReferenceSettings& settings)
 {
   VariableReference variable = get_ref(key, settings);
+  
   return retrieve_index(variable, index, settings);
 }
 
@@ -1012,6 +1115,68 @@ inline const VariableReferenceMap& ThreadSafeContext::get_modifieds(void) const
   MADARA_GUARD_TYPE guard(mutex_);
 
   return changed_map_;
+}
+
+inline KnowledgeMap ThreadSafeContext::get_modifieds_current(
+  const std::map<std::string, bool> & send_list, bool reset)
+{
+  MADARA_GUARD_TYPE guard(mutex_);
+
+  KnowledgeMap map;
+
+  // if there are no limiting prefixes, iterate through and reset
+  if (send_list.size() == 0)
+  {
+    for (auto i = changed_map_.begin();
+         i != changed_map_.end(); )
+    {
+      map.emplace_hint (map.end(),
+        i->first, *i->second.get_record_unsafe());
+
+      if (reset)
+      {
+        i = changed_map_.erase(i);
+      }
+    }
+  }
+  // if there are limiting prefixes, only copy over the prefixes
+  else
+  {
+    // if the prefixes list is smaller than the changed_map_
+    if (send_list.size() < changed_map_.size())
+    {
+      for (auto var : send_list)
+      {
+        auto found = changed_map_.find(var.first.c_str());
+
+        if (found != changed_map_.end())
+        {
+          map.emplace_hint(
+            map.end(), found->first, *found->second.get_record_unsafe());
+          changed_map_.erase(found);
+        }
+      }
+    }
+    // else if the changed_map_ is smaller than the prefixes list
+    else
+    {
+      for (auto i = changed_map_.begin(); i != changed_map_.end();)
+      {
+        if (send_list.find (i->first) != send_list.end())
+        {
+          map.emplace_hint (map.end(),
+            i->first, *i->second.get_record_unsafe());
+
+          if (reset)
+          {
+            i = changed_map_.erase (i);
+          }
+        }
+      }
+    }
+  }
+
+  return map;
 }
 
 inline VariableReferences ThreadSafeContext::save_modifieds(void) const
